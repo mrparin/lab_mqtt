@@ -5,7 +5,8 @@
 #include <DHT.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
-#include <LiquidCrystal_I2C.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SH110X.h>
 
 // ==========================================
 // 1. การตั้งค่าระบบเครือข่ายและ Broker
@@ -40,10 +41,13 @@ const int AIR_VALUE = 0;   // ค่าเมื่อแห้งสนิท (
 const int WATER_VALUE = 4095; // ค่าเมื่อแช่น้ำ (ปรับแก้ได้ตามจริง)
 
 // ==========================================
-// 4. ประกาศอ็อบเจกต์เซ็นเซอร์และจอ LCD
+// 4. ประกาศอ็อบเจกต์เซ็นเซอร์และจอ OLED
 // ==========================================
 DHT dht(DHTPIN, DHTTYPE);
-LiquidCrystal_I2C lcd(0x27, 20, 4); 
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 WiFiManager wm;
 
 WiFiClient espClient;
@@ -58,56 +62,44 @@ float currentHum = 0.0;
 float currentSoil = 0.0;
 
 // ==========================================
-// 5. ฟังก์ชันพิมพ์โครงสร้างหน้าจอคงที่ (Static Template)
+// 5. ฟังก์ชันช่วยแสดงผล OLED
 // ==========================================
-void printLCDTemplate() {
-  lcd.clear();
-  lcd.setCursor(0, 0); lcd.print("WiFi:--- MQTT:---   ");
-  lcd.setCursor(0, 1); lcd.print("T=-----  H=---      ");
-  lcd.setCursor(0, 2); lcd.print("Soil:---% RSSI:---- ");
-  lcd.setCursor(0, 3); lcd.print("Pump:--- Device:RUN ");
+void showOLEDMessage(const char* l1, const char* l2 = "", const char* l3 = "", const char* l4 = "") {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SH110X_WHITE);
+
+  display.setCursor(0, 0);  display.print(l1);
+  display.setCursor(0, 16); display.print(l2);
+  display.setCursor(0, 32); display.print(l3);
+  display.setCursor(0, 48); display.print(l4);
+
+  display.display();
 }
 
 // ==========================================
-// 6. ฟังก์ชันอัปเดตเฉพาะตัวเลข (หน้าจอนิ่ง ไม่กระพริบ ไร้อักษรค้าง)
+// 6. ฟังก์ชันอัปเดตหน้าจอ OLED
 // ==========================================
-void updateLCD() {
-  char buf[8];
+void updateLCD(const char* mqttStateOverride = nullptr) {
+  char line0[32];
+  char line1[32];
+  char line2[32];
+  char line3[32];
 
-  // แสดงสถานะเครือข่าย
-  lcd.setCursor(5, 0);
-  if (WiFi.status() == WL_CONNECTED) lcd.print("OK ");
-  else                               lcd.print("ERR");
+  const char* wifiText = (WiFi.status() == WL_CONNECTED) ? "OK" : "ERR";
+  const char* mqttText = mqttStateOverride ? mqttStateOverride : (client.connected() ? "OK" : "ERR");
 
-  lcd.setCursor(14, 0);
-  if (client.connected()) lcd.print("OK ");
-  else                    lcd.print("ERR");
+  snprintf(line0, sizeof(line0), "WiFi:%s MQTT:%s", wifiText, mqttText);
+  snprintf(line1, sizeof(line1), "T=%5.1f H=%3d", currentTemp, (int)currentHum);
 
-  // แสดงค่าเซ็นเซอร์
-  lcd.setCursor(2, 1);
-  dtostrf(currentTemp, 5, 1, buf);  // เช่น " 25.3"
-  lcd.print(buf);
-
-  lcd.setCursor(11, 1);
-  snprintf(buf, sizeof(buf), "%3d", (int)currentHum);
-  lcd.print(buf);
-
-  lcd.setCursor(5, 2);
-  snprintf(buf, sizeof(buf), "%3d", (int)currentSoil);
-  lcd.print(buf);
-
-  // แสดง RSSI และสถานะปั๊ม
-  lcd.setCursor(15, 2);
   if (WiFi.status() == WL_CONNECTED) {
-    snprintf(buf, sizeof(buf), "%4ld", WiFi.RSSI());
-    lcd.print(buf);
+    snprintf(line2, sizeof(line2), "Soil:%3d RSSI:%4ld", (int)currentSoil, WiFi.RSSI());
   } else {
-    lcd.print("----");
+    snprintf(line2, sizeof(line2), "Soil:%3d RSSI:----", (int)currentSoil);
   }
 
-  lcd.setCursor(5, 3);
-  if (pumpStatus == 1) lcd.print("ON ");
-  else                 lcd.print("OFF");
+  snprintf(line3, sizeof(line3), "Pump:%s Device:RUN", (pumpStatus == 1) ? "ON" : "OFF");
+  showOLEDMessage(line0, line1, line2, line3);
 }
 
 // ==========================================
@@ -118,31 +110,21 @@ void checkConfigButton() {
     delay(50); // Debounce
     if (digitalRead(CONFIG_BUTTON) == LOW) {
       Serial.println("!!! WiFiManager Config Portal !!!");
-      
-      lcd.clear();
-      lcd.setCursor(0, 0); lcd.print("====================");
-      lcd.setCursor(0, 1); lcd.print("  WIFI SETUP MODE ");
-      lcd.setCursor(0, 2); lcd.print(" AP: SmartFarmCfg ");
-      lcd.setCursor(0, 3); lcd.print("====================");
+
+      showOLEDMessage("WIFI SETUP MODE", "AP: SmartFarmCfg", "Open from phone", "");
       
       while(digitalRead(CONFIG_BUTTON) == LOW); // รอจนกว่าจะปล่อยปุ่ม
 
       // เปิด AP สำหรับตั้งค่า WiFi ผ่านมือถือ
       bool ok = wm.startConfigPortal("SmartFarmCfg");
       if (ok) {
-        lcd.clear();
-        lcd.setCursor(0, 1); lcd.print("WiFi Saved OK");
-        lcd.setCursor(0, 2); lcd.print("Reconnecting...");
+        showOLEDMessage("WiFi Saved OK", "Reconnecting...", "", "");
         delay(1200);
       } else {
-        lcd.clear();
-        lcd.setCursor(0, 1); lcd.print("Setup Timeout");
-        lcd.setCursor(0, 2); lcd.print("Using old WiFi");
+        showOLEDMessage("Setup Timeout", "Using old WiFi", "", "");
         delay(1200);
       }
-      
-      // เมื่อหลุดโหมดคอนฟิก ให้วาดโครงสร้างหน้าจอกลับมาใหม่ทันที
-      printLCDTemplate();
+
       updateLCD();
     }
   }
@@ -180,27 +162,22 @@ void callback(char* topic, byte* payload, unsigned int length) {
 // ==========================================
 void setup_wifi() {
   delay(10);
-  lcd.clear();
-  lcd.setCursor(0, 0); lcd.print("WiFi AutoConnect");
+  showOLEDMessage("WiFi AutoConnect", "Connecting...", "", "");
 
   bool connected = wm.autoConnect("SmartFarmCfg");
   
   if (connected && WiFi.status() == WL_CONNECTED) {
-    lcd.clear();
-    lcd.setCursor(0, 0); lcd.print("WiFi Connected!");
-    lcd.setCursor(0, 1); lcd.print("IP Address:");
-    lcd.setCursor(0, 2); lcd.print(WiFi.localIP());
+    char ipLine[32];
+    snprintf(ipLine, sizeof(ipLine), "IP: %s", WiFi.localIP().toString().c_str());
+    showOLEDMessage("WiFi Connected!", ipLine, "", "");
     delay(2000);
   } else {
-    lcd.clear();
-    lcd.setCursor(0, 0); lcd.print("WiFi Setup Failed");
-    lcd.setCursor(0, 1); lcd.print("Restart device...");
+    showOLEDMessage("WiFi Setup Failed", "Restart device...", "", "");
     delay(2000);
     ESP.restart();
   }
-  
-  // วาดแม่แบบหน้าจอเตรียมไว้หลังจบขั้นตอนการเชื่อมต่อ WiFi
-  printLCDTemplate();
+
+  updateLCD();
 }
 
 void reconnect() {
@@ -214,8 +191,8 @@ void reconnect() {
     bool willRetain = true;
     const char* willMessage = "{\"online\":false,\"msg\":\"unexpected_disconnection\"}";
 
-    // แจ้งเตือนหน้าจอว่ากำลังเชื่อมต่อในช่อง MQTT เดิม
-    lcd.setCursor(14, 0); lcd.print("TRY");
+    // แจ้งเตือนหน้าจอว่ากำลังเชื่อมต่อ MQTT
+    updateLCD("TRY");
 
     if (client.connect(clientId.c_str(), mqtt_user, mqtt_pass, willTopic, willQoS, willRetain, willMessage)) {
       Serial.println("connected");
@@ -229,11 +206,38 @@ void reconnect() {
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
-      
-      lcd.setCursor(14, 0); lcd.print("ERR");
+
+      updateLCD("ERR");
       delay(5000);
     }
   }
+}
+
+bool initOLED() {
+  // ESP32 default I2C pins: SDA=21, SCL=22
+  Wire.begin();
+
+  Serial.println("Scanning I2C...");
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.print("I2C device found at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.println(addr, HEX);
+    }
+  }
+
+  if (display.begin(0x3C, true)) {
+    Serial.println("OLED init OK at 0x3C");
+    return true;
+  }
+
+  if (display.begin(0x3D, true)) {
+    Serial.println("OLED init OK at 0x3D");
+    return true;
+  }
+
+  return false;
 }
 
 // ==========================================
@@ -246,8 +250,12 @@ void setup() {
   digitalWrite(RELAY_PIN, LOW); 
   pinMode(CONFIG_BUTTON, INPUT_PULLUP); 
   
-  lcd.init();
-  lcd.backlight();
+  if (!initOLED()) {
+    Serial.println("SH110X init failed");
+    while (true) { delay(1000); }
+  }
+  display.clearDisplay();
+  display.display();
   
   dht.begin();
   setup_wifi(); 
@@ -279,7 +287,7 @@ void loop() {
     // ตรวจสอบสัญญาณเซ็นเซอร์สภาพอากาศ
     if (isnan(t) || isnan(h)) {
       Serial.println("Error: DHT22 Fail");
-      lcd.setCursor(7, 1); lcd.print("DHT22 ERR!! ");
+      showOLEDMessage("Sensor Error", "DHT22 ERR!!", "", "");
       return;
     }
 
