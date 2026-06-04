@@ -4,6 +4,7 @@
 #include <PubSubClient.h>
 #include <DHT.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
@@ -11,7 +12,6 @@
 // ==========================================
 // 1. การตั้งค่าระบบเครือข่ายและ Broker
 // ==========================================
-const char* mqtt_server = "192.168.1.5";
 const int mqtt_port    = 1883;
 const char* mqtt_user  = "YOUR_MQTT_USERNAME"; 
 const char* mqtt_pass  = "YOUR_MQTT_PASSWORD"; 
@@ -19,14 +19,15 @@ const char* mqtt_pass  = "YOUR_MQTT_PASSWORD";
 // ==========================================
 // 2. การตั้งค่าโครงสร้าง MQTT Topic
 // ==========================================
-#define SITE_ID   "siteA"
-#define ZONE_ID   "zone1"
-#define BOARD_ID  "device01"
+String mqttServer = "192.168.1.5";
+String siteId = "siteA";
+String zoneId = "zone1";
+String boardId = "device01";
 
-const char* TOPIC_TELEMETRY = "smartfarm/" SITE_ID "/" ZONE_ID "/" BOARD_ID "/telemetry";
-const char* TOPIC_STATUS    = "smartfarm/" SITE_ID "/" ZONE_ID "/" BOARD_ID "/status";
-const char* TOPIC_CMD       = "smartfarm/" SITE_ID "/" ZONE_ID "/" BOARD_ID "/cmd";
-const char* TOPIC_ACK       = "smartfarm/" SITE_ID "/" ZONE_ID "/" BOARD_ID "/ack";
+String topicTelemetry;
+String topicStatus;
+String topicCmd;
+String topicAck;
 
 // ==========================================
 // 3. การกำหนดขา GPIO
@@ -52,6 +53,18 @@ WiFiManager wm;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+Preferences prefs;
+
+bool shouldSaveConfig = false;
+char mqttServerBuf[40];
+char siteIdBuf[20];
+char zoneIdBuf[20];
+char boardIdBuf[20];
+
+WiFiManagerParameter param_mqtt_server("mqtt_server", "MQTT Server", mqttServerBuf, sizeof(mqttServerBuf));
+WiFiManagerParameter param_site_id("site_id", "SITE_ID", siteIdBuf, sizeof(siteIdBuf));
+WiFiManagerParameter param_zone_id("zone_id", "ZONE_ID", zoneIdBuf, sizeof(zoneIdBuf));
+WiFiManagerParameter param_board_id("board_id", "BOARD_ID", boardIdBuf, sizeof(boardIdBuf));
 
 unsigned long lastMsg = 0;
 int pumpStatus = 0;
@@ -60,6 +73,70 @@ int pumpStatus = 0;
 float currentTemp = 0.0;
 float currentHum = 0.0;
 float currentSoil = 0.0;
+
+void rebuildTopics() {
+  topicTelemetry = "smartfarm/" + siteId + "/" + zoneId + "/" + boardId + "/telemetry";
+  topicStatus    = "smartfarm/" + siteId + "/" + zoneId + "/" + boardId + "/status";
+  topicCmd       = "smartfarm/" + siteId + "/" + zoneId + "/" + boardId + "/cmd";
+  topicAck       = "smartfarm/" + siteId + "/" + zoneId + "/" + boardId + "/ack";
+}
+
+void saveConfigCallback() {
+  shouldSaveConfig = true;
+}
+
+void loadConfig() {
+  prefs.begin("farmcfg", true);
+  mqttServer = prefs.getString("mqtt_server", mqttServer);
+  siteId = prefs.getString("site_id", siteId);
+  zoneId = prefs.getString("zone_id", zoneId);
+  boardId = prefs.getString("board_id", boardId);
+  prefs.end();
+
+  mqttServer.toCharArray(mqttServerBuf, sizeof(mqttServerBuf));
+  siteId.toCharArray(siteIdBuf, sizeof(siteIdBuf));
+  zoneId.toCharArray(zoneIdBuf, sizeof(zoneIdBuf));
+  boardId.toCharArray(boardIdBuf, sizeof(boardIdBuf));
+
+  rebuildTopics();
+}
+
+void saveConfig() {
+  prefs.begin("farmcfg", false);
+  prefs.putString("mqtt_server", mqttServer);
+  prefs.putString("site_id", siteId);
+  prefs.putString("zone_id", zoneId);
+  prefs.putString("board_id", boardId);
+  prefs.end();
+}
+
+void applyPortalValues() {
+  String tmp;
+
+  tmp = String(param_mqtt_server.getValue());
+  tmp.trim();
+  if (tmp.length() > 0) mqttServer = tmp;
+
+  tmp = String(param_site_id.getValue());
+  tmp.trim();
+  if (tmp.length() > 0) siteId = tmp;
+
+  tmp = String(param_zone_id.getValue());
+  tmp.trim();
+  if (tmp.length() > 0) zoneId = tmp;
+
+  tmp = String(param_board_id.getValue());
+  tmp.trim();
+  if (tmp.length() > 0) boardId = tmp;
+
+  rebuildTopics();
+  client.setServer(mqttServer.c_str(), mqtt_port);
+
+  if (shouldSaveConfig) {
+    saveConfig();
+    shouldSaveConfig = false;
+  }
+}
 
 // ==========================================
 // 5. ฟังก์ชันช่วยแสดงผล OLED
@@ -118,6 +195,7 @@ void checkConfigButton() {
       // เปิด AP สำหรับตั้งค่า WiFi ผ่านมือถือ
       bool ok = wm.startConfigPortal("SmartFarmCfg");
       if (ok) {
+        applyPortalValues();
         showOLEDMessage("WiFi Saved OK", "Reconnecting...", "", "");
         delay(1200);
       } else {
@@ -147,10 +225,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
       pumpStatus = doc["pump"];
       if (pumpStatus == 1) {
         digitalWrite(RELAY_PIN, HIGH);
-        client.publish(TOPIC_ACK, "{\"pump\":1,\"status\":\"success\"}");
+        client.publish(topicAck.c_str(), "{\"pump\":1,\"status\":\"success\"}");
       } else if (pumpStatus == 0) {
         digitalWrite(RELAY_PIN, LOW);
-        client.publish(TOPIC_ACK, "{\"pump\":0,\"status\":\"success\"}");
+        client.publish(topicAck.c_str(), "{\"pump\":0,\"status\":\"success\"}");
       }
       updateLCD(); // อัปเดตสถานะปั๊มทันทีเมื่อรับคำสั่ง
     }
@@ -162,11 +240,25 @@ void callback(char* topic, byte* payload, unsigned int length) {
 // ==========================================
 void setup_wifi() {
   delay(10);
+
+  // เติมค่าปัจจุบันลงช่อง custom parameter ในหน้า config
+  mqttServer.toCharArray(mqttServerBuf, sizeof(mqttServerBuf));
+  siteId.toCharArray(siteIdBuf, sizeof(siteIdBuf));
+  zoneId.toCharArray(zoneIdBuf, sizeof(zoneIdBuf));
+  boardId.toCharArray(boardIdBuf, sizeof(boardIdBuf));
+
+  wm.setSaveConfigCallback(saveConfigCallback);
+  wm.addParameter(&param_mqtt_server);
+  wm.addParameter(&param_site_id);
+  wm.addParameter(&param_zone_id);
+  wm.addParameter(&param_board_id);
+
   showOLEDMessage("WiFi AutoConnect", "Connecting...", "", "");
 
   bool connected = wm.autoConnect("SmartFarmCfg");
   
   if (connected && WiFi.status() == WL_CONNECTED) {
+    applyPortalValues();
     char ipLine[32];
     snprintf(ipLine, sizeof(ipLine), "IP: %s", WiFi.localIP().toString().c_str());
     showOLEDMessage("WiFi Connected!", ipLine, "", "");
@@ -186,7 +278,7 @@ void reconnect() {
     
     Serial.print("Attempting MQTT connection...");
     String clientId = "ESP32RealClient-" + String(random(0, 0xffff), HEX);
-    const char* willTopic = TOPIC_STATUS;
+    const char* willTopic = topicStatus.c_str();
     int willQoS = 1;
     bool willRetain = true;
     const char* willMessage = "{\"online\":false,\"msg\":\"unexpected_disconnection\"}";
@@ -198,8 +290,8 @@ void reconnect() {
       Serial.println("connected");
       long rssi = WiFi.RSSI();
       String birthPayload = "{\"online\":true,\"rssi\":" + String(rssi) + ",\"msg\":\"hardware_ready\"}";
-      client.publish(TOPIC_STATUS, birthPayload.c_str(), true);
-      client.subscribe(TOPIC_CMD);
+      client.publish(topicStatus.c_str(), birthPayload.c_str(), true);
+      client.subscribe(topicCmd.c_str());
       
       // อัปเดตข้อมูลขึ้นจอทันที
       updateLCD();
@@ -245,6 +337,8 @@ bool initOLED() {
 // ==========================================
 void setup() {
   Serial.begin(115200);
+
+  loadConfig();
   
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW); 
@@ -260,7 +354,7 @@ void setup() {
   dht.begin();
   setup_wifi(); 
   
-  client.setServer(mqtt_server, mqtt_port);
+  client.setServer(mqttServer.c_str(), mqtt_port);
   client.setCallback(callback);
 }
 
@@ -309,7 +403,7 @@ void loop() {
 
     char telBuffer[200];
     serializeJson(telDoc, telBuffer);
-    client.publish(TOPIC_TELEMETRY, telBuffer);
+    client.publish(topicTelemetry.c_str(), telBuffer);
 
     // ------------------------------------------
     // ส่งข้อมูล Status
@@ -322,6 +416,6 @@ void loop() {
 
     char statBuffer[150];
     serializeJson(statDoc, statBuffer);
-    client.publish(TOPIC_STATUS, statBuffer, true);
+    client.publish(topicStatus.c_str(), statBuffer, true);
   }
 }
