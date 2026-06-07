@@ -70,7 +70,8 @@
             ],
             [
                 "dd68b81692bdec9c",
-                "ab2c52e0b3af6551"
+                "ab2c52e0b3af6551",
+                "efc1767457d4ba57"
             ]
         ]
     },
@@ -327,11 +328,66 @@
         ]
     },
     {
+        "id": "95f95ea5df8aa38f",
+        "type": "ui_switch",
+        "z": "66f84989428d9eb6",
+        "name": "",
+        "label": "Auto Mode",
+        "tooltip": "",
+        "group": "8ceda65902082368",
+        "order": 2,
+        "width": "4",
+        "height": "2",
+        "passthru": true,
+        "decouple": "false",
+        "topic": "topic",
+        "topicType": "msg",
+        "style": "",
+        "onvalue": "true",
+        "onvalueType": "bool",
+        "onicon": "",
+        "oncolor": "",
+        "offvalue": "false",
+        "offvalueType": "bool",
+        "officon": "",
+        "offcolor": "",
+        "animate": false,
+        "className": "",
+        "x": 430,
+        "y": 500,
+        "wires": [
+            [
+                "a9ea47f02ff8ea70"
+            ]
+        ]
+    },
+    {
+        "id": "a9ea47f02ff8ea70",
+        "type": "function",
+        "z": "66f84989428d9eb6",
+        "name": "build mode cmd",
+        "func": "const siteId = flow.get(\"targetSiteId\") || \"siteA\";\nconst zoneId = flow.get(\"targetZoneId\") || \"zone1\";\nconst boardId = flow.get(\"targetBoardId\") || \"device01\";\n\nconst mode = msg.payload ? \"auto\" : \"manual\";\nflow.set(\"controlMode\", mode);\n\nmsg.topic = `smartfarm/${siteId}/${zoneId}/${boardId}/cmd`;\nmsg.payload = { mode: mode };\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 660,
+        "y": 500,
+        "wires": [
+            [
+                "fd13dc41d3273c8a",
+                "d11e035526b97353"
+            ]
+        ]
+    },
+    {
         "id": "a3f7be5e80ea9fd1",
         "type": "function",
         "z": "66f84989428d9eb6",
         "name": "build pump cmd",
-        "func": "// Build dynamic target topic from latest telemetry source\nconst siteId = flow.get(\"targetSiteId\") || \"siteA\";\nconst zoneId = flow.get(\"targetZoneId\") || \"zone1\";\nconst boardId = flow.get(\"targetBoardId\") || \"device01\";\n\nmsg.topic = `smartfarm/${siteId}/${zoneId}/${boardId}/cmd`;\nmsg.payload = { pump: msg.payload ? 1 : 0 };\nreturn msg;",
+        "func": "// Manual pump command only works while mode is manual\nconst mode = flow.get(\"controlMode\") || \"manual\";\nif (mode !== \"manual\") {\n    return null;\n}\n\nconst siteId = flow.get(\"targetSiteId\") || \"siteA\";\nconst zoneId = flow.get(\"targetZoneId\") || \"zone1\";\nconst boardId = flow.get(\"targetBoardId\") || \"device01\";\n\nmsg.topic = `smartfarm/${siteId}/${zoneId}/${boardId}/cmd`;\nmsg.payload = { mode: \"manual\", pump: msg.payload ? 1 : 0 };\nreturn msg;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
@@ -340,6 +396,27 @@
         "libs": [],
         "x": 660,
         "y": 560,
+        "wires": [
+            [
+                "fd13dc41d3273c8a",
+                "d11e035526b97353"
+            ]
+        ]
+    },
+    {
+        "id": "efc1767457d4ba57",
+        "type": "function",
+        "z": "66f84989428d9eb6",
+        "name": "auto pump by soil",
+        "func": "const mode = flow.get(\"controlMode\") || \"manual\";\nif (mode !== \"auto\") {\n    return null;\n}\n\nconst soil = Number(msg.payload);\nif (Number.isNaN(soil)) {\n    return null;\n}\n\nconst onThreshold = 30;\nconst offThreshold = 45;\nlet currentPump = flow.get(\"autoPumpState\");\nif (currentPump !== 0 && currentPump !== 1) {\n    currentPump = 0;\n}\n\nlet nextPump = currentPump;\nif (soil <= onThreshold) {\n    nextPump = 1;\n} else if (soil >= offThreshold) {\n    nextPump = 0;\n}\n\nif (nextPump === currentPump) {\n    return null;\n}\n\nflow.set(\"autoPumpState\", nextPump);\n\nconst siteId = flow.get(\"targetSiteId\") || \"siteA\";\nconst zoneId = flow.get(\"targetZoneId\") || \"zone1\";\nconst boardId = flow.get(\"targetBoardId\") || \"device01\";\n\nmsg.topic = `smartfarm/${siteId}/${zoneId}/${boardId}/cmd`;\nmsg.payload = { mode: \"auto\", pump: nextPump };\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1120,
+        "y": 420,
         "wires": [
             [
                 "fd13dc41d3273c8a",

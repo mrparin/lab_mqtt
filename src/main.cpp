@@ -68,11 +68,31 @@ WiFiManagerParameter param_board_id("board_id", "BOARD_ID", boardIdBuf, sizeof(b
 
 unsigned long lastMsg = 0;
 int pumpStatus = 0;
+String pumpMode = "manual";
+
+const float AUTO_ON_THRESHOLD  = 30.0;
+const float AUTO_OFF_THRESHOLD = 45.0;
 
 // ตัวแปรเก็บค่าล่าสุดไว้แสดงผล
 float currentTemp = 0.0;
 float currentHum = 0.0;
 float currentSoil = 0.0;
+
+void applyPumpState(int newState) {
+  pumpStatus = (newState == 1) ? 1 : 0;
+  digitalWrite(RELAY_PIN, pumpStatus == 1 ? HIGH : LOW);
+}
+
+void publishAck(const char* statusText) {
+  StaticJsonDocument<200> ackDoc;
+  ackDoc["pump"] = pumpStatus;
+  ackDoc["mode"] = pumpMode;
+  ackDoc["status"] = statusText;
+
+  char ackBuffer[200];
+  serializeJson(ackDoc, ackBuffer);
+  client.publish(topicAck.c_str(), ackBuffer);
+}
 
 void rebuildTopics() {
   topicTelemetry = "smartfarm/" + siteId + "/" + zoneId + "/" + boardId + "/telemetry";
@@ -212,6 +232,7 @@ void checkConfigButton() {
 // 8. ฟังก์ชัน Callback รับคำสั่งควบคุม (CMD)
 // ==========================================
 void callback(char* topic, byte* payload, unsigned int length) {
+  (void)topic;
   String message = "";
   for (int i = 0; i < length; i++) {
     message += (char)payload[i];
@@ -220,19 +241,36 @@ void callback(char* topic, byte* payload, unsigned int length) {
   StaticJsonDocument<200> doc;
   DeserializationError error = deserializeJson(doc, message);
 
-  if (!error) {
-    if (doc.containsKey("pump")) {
-      pumpStatus = doc["pump"];
-      if (pumpStatus == 1) {
-        digitalWrite(RELAY_PIN, HIGH);
-        client.publish(topicAck.c_str(), "{\"pump\":1,\"status\":\"success\"}");
-      } else if (pumpStatus == 0) {
-        digitalWrite(RELAY_PIN, LOW);
-        client.publish(topicAck.c_str(), "{\"pump\":0,\"status\":\"success\"}");
+  if (error) {
+    publishAck("invalid_json");
+    return;
+  }
+
+  if (doc.containsKey("mode")) {
+    const char* modeValue = doc["mode"];
+    if (modeValue != nullptr) {
+      String requestedMode = String(modeValue);
+      requestedMode.toLowerCase();
+      if (requestedMode == "auto" || requestedMode == "manual") {
+        pumpMode = requestedMode;
       }
-      updateLCD(); // อัปเดตสถานะปั๊มทันทีเมื่อรับคำสั่ง
     }
   }
+
+  if (doc.containsKey("pump")) {
+    int requestedPump = doc["pump"];
+    if (pumpMode == "manual") {
+      applyPumpState(requestedPump);
+      publishAck("success");
+    } else {
+      publishAck("ignored_in_auto_mode");
+    }
+    updateLCD();
+    return;
+  }
+
+  publishAck("mode_updated");
+  updateLCD();
 }
 
 // ==========================================
@@ -341,7 +379,7 @@ void setup() {
   loadConfig();
   
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW); 
+  applyPumpState(0);
   pinMode(CONFIG_BUTTON, INPUT_PULLUP); 
   
   if (!initOLED()) {
@@ -390,6 +428,17 @@ void loop() {
     currentHum = h;
     currentSoil = soil_moisture;
 
+    // โหมด Auto ตัดสินใจที่บอร์ดด้วย hysteresis เพื่อลดการสลับรีเลย์ถี่
+    if (pumpMode == "auto") {
+      if (currentSoil <= AUTO_ON_THRESHOLD && pumpStatus == 0) {
+        applyPumpState(1);
+        publishAck("auto_pump_on");
+      } else if (currentSoil >= AUTO_OFF_THRESHOLD && pumpStatus == 1) {
+        applyPumpState(0);
+        publishAck("auto_pump_off");
+      }
+    }
+
     // พิมพ์เฉพาะตัวเล็กลงจอภาพ (นิ่งสนิท ไร้รอยทับ)
     updateLCD();
 
@@ -400,6 +449,8 @@ void loop() {
     telDoc["temperature"] = serialized(String(t, 2));
     telDoc["humidity"]    = serialized(String(h, 2));
     telDoc["soil_moisture"] = serialized(String(soil_moisture, 1));
+    telDoc["pump"] = pumpStatus;
+    telDoc["mode"] = pumpMode;
 
     char telBuffer[200];
     serializeJson(telDoc, telBuffer);
@@ -409,12 +460,14 @@ void loop() {
     // ส่งข้อมูล Status
     // ------------------------------------------
     long rssi = WiFi.RSSI();
-    StaticJsonDocument<150> statDoc;
+    StaticJsonDocument<220> statDoc;
     statDoc["online"] = true;
     statDoc["rssi"]   = rssi;
     statDoc["battery_v"] = 4.15;
+    statDoc["pump"] = pumpStatus;
+    statDoc["mode"] = pumpMode;
 
-    char statBuffer[150];
+    char statBuffer[220];
     serializeJson(statDoc, statBuffer);
     client.publish(topicStatus.c_str(), statBuffer, true);
   }
