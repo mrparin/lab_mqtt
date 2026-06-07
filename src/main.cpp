@@ -36,7 +36,7 @@ String topicAck;
 #define DHTTYPE       DHT22
 #define SOIL_PIN      32
 #define CONFIG_BUTTON 4
-#define RELAY_PIN     2   // รีเลย์ปั๊มน้ำ
+#define RELAY_PIN     5   // รีเลย์ปั๊มน้ำ
 
 const int AIR_VALUE = 0;   // ค่าเมื่อแห้งสนิท (ปรับแก้ได้ตามจริง)
 const int WATER_VALUE = 4095; // ค่าเมื่อแช่น้ำ (ปรับแก้ได้ตามจริง)
