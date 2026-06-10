@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <WiFi.h>
+#include <ESP8266WiFi.h>
 #include <WiFiManager.h>
 #include <PubSubClient.h>
 #include <DHT.h>
@@ -11,9 +11,9 @@
 // ==========================================
 // 1. การตั้งค่าระบบเครือข่ายและ Broker
 // ==========================================
-const char* mqtt_server = "192.168.1.5";
+const char* mqtt_server = "192.168.1.5";//เปลี่ยนเองตามจริง
 const int mqtt_port    = 1883;
-const char* mqtt_user  = "YOUR_MQTT_USERNAME"; 
+const char* mqtt_user  = "YOUR_MQTT_USERNAME"; //ถ้ามี
 const char* mqtt_pass  = "YOUR_MQTT_PASSWORD"; 
 
 // ==========================================
@@ -31,14 +31,14 @@ const char* TOPIC_ACK       = "smartfarm/" SITE_ID "/" ZONE_ID "/" BOARD_ID "/ac
 // ==========================================
 // 3. การกำหนดขา GPIO
 // ==========================================
-#define DHTPIN        33
+#define DHTPIN        D4
 #define DHTTYPE       DHT22
-#define SOIL_PIN      32
-#define CONFIG_BUTTON 4
-#define RELAY_PIN     2   // รีเลย์ปั๊มน้ำ
+#define SOIL_PIN      A0
+#define CONFIG_BUTTON D3
+#define RELAY_PIN     D1   // รีเลย์ปั๊มน้ำ
 
 const int AIR_VALUE = 0;   // ค่าเมื่อแห้งสนิท (ปรับแก้ได้ตามจริง)
-const int WATER_VALUE = 4095; // ค่าเมื่อแช่น้ำ (ปรับแก้ได้ตามจริง)
+const int WATER_VALUE = 1023; // ค่าเมื่อแช่น้ำ (ปรับแก้ได้ตามจริง)
 
 // ==========================================
 // 4. ประกาศอ็อบเจกต์เซ็นเซอร์และจอ OLED
@@ -185,7 +185,7 @@ void reconnect() {
     checkConfigButton(); 
     
     Serial.print("Attempting MQTT connection...");
-    String clientId = "ESP32RealClient-" + String(random(0, 0xffff), HEX);
+    String clientId = "ESP8266Client-" + String(random(0, 0xffff), HEX);
     const char* willTopic = TOPIC_STATUS;
     int willQoS = 1;
     bool willRetain = true;
@@ -214,8 +214,8 @@ void reconnect() {
 }
 
 bool initOLED() {
-  // ESP32 default I2C pins: SDA=21, SCL=22
-  Wire.begin();
+  // ESP8266 (NodeMCU) default I2C pins: SDA=D2, SCL=D1
+  Wire.begin(D2, D1);
 
   Serial.println("Scanning I2C...");
   for (uint8_t addr = 1; addr < 127; addr++) {
