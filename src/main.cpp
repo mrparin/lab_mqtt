@@ -11,10 +11,10 @@
 // ==========================================
 // 1. การตั้งค่าระบบเครือข่ายและ Broker
 // ==========================================
-const char* mqtt_server = "192.168.1.5";//เปลี่ยนเองตามจริง
-const int mqtt_port    = 1883;
-const char* mqtt_user  = "YOUR_MQTT_USERNAME"; //ถ้ามี
-const char* mqtt_pass  = "YOUR_MQTT_PASSWORD"; 
+const char* mqtt_server = "192.168.1.5";        // เปลี่ยนเองตามจริง
+const int mqtt_port     = 1883;
+const char* mqtt_user   = "YOUR_MQTT_USERNAME"; // ถ้าไม่มี username ให้ใส่ "" ได้
+const char* mqtt_pass   = "YOUR_MQTT_PASSWORD"; // ถ้าไม่มี password ให้ใส่ "" ได้
 
 // ==========================================
 // 2. การตั้งค่าโครงสร้าง MQTT Topic
@@ -29,24 +29,28 @@ const char* TOPIC_CMD       = "smartfarm/" SITE_ID "/" ZONE_ID "/" BOARD_ID "/cm
 const char* TOPIC_ACK       = "smartfarm/" SITE_ID "/" ZONE_ID "/" BOARD_ID "/ack";
 
 // ==========================================
-// 3. การกำหนดขา GPIO
+// 3. การกำหนดขา GPIO ให้ถูกต้องตามจริง
 // ==========================================
+// DHT22 ต่อที่ D4
 #define DHTPIN        D4
 #define DHTTYPE       DHT22
-#define SOIL_PIN      A0
-#define CONFIG_BUTTON D3
-#define RELAY_PIN     D1   // รีเลย์ปั๊มน้ำ
 
-const int AIR_VALUE = 0;   // ค่าเมื่อแห้งสนิท (ปรับแก้ได้ตามจริง)
-const int WATER_VALUE = 1023; // ค่าเมื่อแช่น้ำ (ปรับแก้ได้ตามจริง)
+// ปุ่มเข้าโหมด WiFi Config ต่อที่ D3
+#define CONFIG_BUTTON D3
+
+// Relay ต่อที่ D6
+// ไม่ใช้ D1 เพราะ D1 เป็น SCL ของ OLED I2C
+#define RELAY_PIN     D6
 
 // ==========================================
 // 4. ประกาศอ็อบเจกต์เซ็นเซอร์และจอ OLED
 // ==========================================
 DHT dht(DHTPIN, DHTTYPE);
+
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
+
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 WiFiManager wm;
 
@@ -58,21 +62,31 @@ int pumpStatus = 0;
 
 // ตัวแปรเก็บค่าล่าสุดไว้แสดงผล
 float currentTemp = 0.0;
-float currentHum = 0.0;
-float currentSoil = 0.0;
 
 // ==========================================
 // 5. ฟังก์ชันช่วยแสดงผล OLED
 // ==========================================
-void showOLEDMessage(const char* l1, const char* l2 = "", const char* l3 = "", const char* l4 = "") {
+void showOLEDMessage(
+  const char* l1,
+  const char* l2 = "",
+  const char* l3 = "",
+  const char* l4 = ""
+) {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SH110X_WHITE);
 
-  display.setCursor(0, 0);  display.print(l1);
-  display.setCursor(0, 16); display.print(l2);
-  display.setCursor(0, 32); display.print(l3);
-  display.setCursor(0, 48); display.print(l4);
+  display.setCursor(0, 0);
+  display.print(l1);
+
+  display.setCursor(0, 16);
+  display.print(l2);
+
+  display.setCursor(0, 32);
+  display.print(l3);
+
+  display.setCursor(0, 48);
+  display.print(l4);
 
   display.display();
 }
@@ -90,15 +104,16 @@ void updateLCD(const char* mqttStateOverride = nullptr) {
   const char* mqttText = mqttStateOverride ? mqttStateOverride : (client.connected() ? "OK" : "ERR");
 
   snprintf(line0, sizeof(line0), "WiFi:%s MQTT:%s", wifiText, mqttText);
-  snprintf(line1, sizeof(line1), "T=%5.1f H=%3d", currentTemp, (int)currentHum);
+  snprintf(line1, sizeof(line1), "Temp: %5.1f C", currentTemp);
 
   if (WiFi.status() == WL_CONNECTED) {
-    snprintf(line2, sizeof(line2), "Soil:%3d RSSI:%4ld", (int)currentSoil, WiFi.RSSI());
+    snprintf(line2, sizeof(line2), "RSSI:%4ld", WiFi.RSSI());
   } else {
-    snprintf(line2, sizeof(line2), "Soil:%3d RSSI:----", (int)currentSoil);
+    snprintf(line2, sizeof(line2), "RSSI:----");
   }
 
   snprintf(line3, sizeof(line3), "Pump:%s Device:RUN", (pumpStatus == 1) ? "ON" : "OFF");
+
   showOLEDMessage(line0, line1, line2, line3);
 }
 
@@ -107,16 +122,26 @@ void updateLCD(const char* mqttStateOverride = nullptr) {
 // ==========================================
 void checkConfigButton() {
   if (digitalRead(CONFIG_BUTTON) == LOW) {
-    delay(50); // Debounce
+    delay(50); // debounce
+
     if (digitalRead(CONFIG_BUTTON) == LOW) {
       Serial.println("!!! WiFiManager Config Portal !!!");
 
-      showOLEDMessage("WIFI SETUP MODE", "AP: SmartFarmCfg", "Open from phone", "");
-      
-      while(digitalRead(CONFIG_BUTTON) == LOW); // รอจนกว่าจะปล่อยปุ่ม
+      showOLEDMessage(
+        "WIFI SETUP MODE",
+        "AP: SmartFarmCfg",
+        "Open from phone",
+        ""
+      );
+
+      // รอจนกว่าจะปล่อยปุ่ม
+      while (digitalRead(CONFIG_BUTTON) == LOW) {
+        delay(10);
+      }
 
       // เปิด AP สำหรับตั้งค่า WiFi ผ่านมือถือ
       bool ok = wm.startConfigPortal("SmartFarmCfg");
+
       if (ok) {
         showOLEDMessage("WiFi Saved OK", "Reconnecting...", "", "");
         delay(1200);
@@ -131,44 +156,67 @@ void checkConfigButton() {
 }
 
 // ==========================================
-// 8. ฟังก์ชัน Callback รับคำสั่งควบคุม (CMD)
+// 8. ฟังก์ชัน Callback รับคำสั่งควบคุม Pump ผ่าน MQTT
 // ==========================================
 void callback(char* topic, byte* payload, unsigned int length) {
   String message = "";
-  for (int i = 0; i < length; i++) {
+
+  for (unsigned int i = 0; i < length; i++) {
     message += (char)payload[i];
   }
+
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  Serial.println(message);
 
   StaticJsonDocument<200> doc;
   DeserializationError error = deserializeJson(doc, message);
 
-  if (!error) {
-    if (doc.containsKey("pump")) {
-      pumpStatus = doc["pump"];
-      if (pumpStatus == 1) {
-        digitalWrite(RELAY_PIN, HIGH);
-        client.publish(TOPIC_ACK, "{\"pump\":1,\"status\":\"success\"}");
-      } else if (pumpStatus == 0) {
-        digitalWrite(RELAY_PIN, LOW);
-        client.publish(TOPIC_ACK, "{\"pump\":0,\"status\":\"success\"}");
-      }
-      updateLCD(); // อัปเดตสถานะปั๊มทันทีเมื่อรับคำสั่ง
+  if (error) {
+    Serial.print("JSON parse failed: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  if (doc.containsKey("pump")) {
+    pumpStatus = doc["pump"];
+
+    if (pumpStatus == 1) {
+      digitalWrite(RELAY_PIN, HIGH);
+      client.publish(TOPIC_ACK, "{\"pump\":1,\"status\":\"success\"}");
+      Serial.println("Pump ON");
+    } else if (pumpStatus == 0) {
+      digitalWrite(RELAY_PIN, LOW);
+      client.publish(TOPIC_ACK, "{\"pump\":0,\"status\":\"success\"}");
+      Serial.println("Pump OFF");
     }
+
+    // อัปเดตสถานะปั๊มทันทีเมื่อรับคำสั่ง
+    updateLCD();
   }
 }
 
 // ==========================================
-// 9. ฟังก์ชันเชื่อมต่อ WiFi และ MQTT Broker
+// 9. ฟังก์ชันเชื่อมต่อ WiFi
 // ==========================================
 void setup_wifi() {
   delay(10);
+
   showOLEDMessage("WiFi AutoConnect", "Connecting...", "", "");
 
   bool connected = wm.autoConnect("SmartFarmCfg");
-  
+
   if (connected && WiFi.status() == WL_CONNECTED) {
     char ipLine[32];
-    snprintf(ipLine, sizeof(ipLine), "IP: %s", WiFi.localIP().toString().c_str());
+
+    snprintf(
+      ipLine,
+      sizeof(ipLine),
+      "IP: %s",
+      WiFi.localIP().toString().c_str()
+    );
+
     showOLEDMessage("WiFi Connected!", ipLine, "", "");
     delay(2000);
   } else {
@@ -180,32 +228,53 @@ void setup_wifi() {
   updateLCD();
 }
 
+// ==========================================
+// 10. ฟังก์ชันเชื่อมต่อ MQTT Broker
+// ==========================================
 void reconnect() {
   while (!client.connected()) {
-    checkConfigButton(); 
-    
+    checkConfigButton();
+
     Serial.print("Attempting MQTT connection...");
+
     String clientId = "ESP8266Client-" + String(random(0, 0xffff), HEX);
+
     const char* willTopic = TOPIC_STATUS;
     int willQoS = 1;
     bool willRetain = true;
     const char* willMessage = "{\"online\":false,\"msg\":\"unexpected_disconnection\"}";
 
-    // แจ้งเตือนหน้าจอว่ากำลังเชื่อมต่อ MQTT
     updateLCD("TRY");
 
-    if (client.connect(clientId.c_str(), mqtt_user, mqtt_pass, willTopic, willQoS, willRetain, willMessage)) {
+    bool mqttConnected;
+
+    // ถ้าไม่ได้ใช้ username/password ให้แก้ mqtt_user และ mqtt_pass เป็น ""
+    mqttConnected = client.connect(
+      clientId.c_str(),
+      mqtt_user,
+      mqtt_pass,
+      willTopic,
+      willQoS,
+      willRetain,
+      willMessage
+    );
+
+    if (mqttConnected) {
       Serial.println("connected");
+
       long rssi = WiFi.RSSI();
-      String birthPayload = "{\"online\":true,\"rssi\":" + String(rssi) + ",\"msg\":\"hardware_ready\"}";
+
+      String birthPayload = "{\"online\":true,\"rssi\":" +
+                            String(rssi) +
+                            ",\"msg\":\"hardware_ready\"}";
+
       client.publish(TOPIC_STATUS, birthPayload.c_str(), true);
       client.subscribe(TOPIC_CMD);
-      
-      // อัปเดตข้อมูลขึ้นจอทันที
+
       updateLCD();
     } else {
       Serial.print("failed, rc=");
-      Serial.print(client.state());
+      Serial.println(client.state());
 
       updateLCD("ERR");
       delay(5000);
@@ -213,16 +282,27 @@ void reconnect() {
   }
 }
 
+// ==========================================
+// 11. ฟังก์ชันเริ่มต้น OLED
+// ==========================================
 bool initOLED() {
-  // ESP8266 (NodeMCU) default I2C pins: SDA=D2, SCL=D1
+  // ESP8266 NodeMCU I2C:
+  // SDA = D2
+  // SCL = D1
   Wire.begin(D2, D1);
 
   Serial.println("Scanning I2C...");
+
   for (uint8_t addr = 1; addr < 127; addr++) {
     Wire.beginTransmission(addr);
+
     if (Wire.endTransmission() == 0) {
       Serial.print("I2C device found at 0x");
-      if (addr < 16) Serial.print("0");
+
+      if (addr < 16) {
+        Serial.print("0");
+      }
+
       Serial.println(addr, HEX);
     }
   }
@@ -241,87 +321,114 @@ bool initOLED() {
 }
 
 // ==========================================
-// 10. ส่วนเริ่มต้นโปรแกรมและ Loop การทำงาน
+// 12. ส่วนเริ่มต้นโปรแกรม
 // ==========================================
 void setup() {
   Serial.begin(115200);
-  
+
+  // ตั้งค่า Relay
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW); 
-  pinMode(CONFIG_BUTTON, INPUT_PULLUP); 
-  
+  digitalWrite(RELAY_PIN, LOW);
+
+  // ตั้งค่าปุ่ม WiFi Config
+  pinMode(CONFIG_BUTTON, INPUT_PULLUP);
+
+  // เริ่มต้น OLED
   if (!initOLED()) {
     Serial.println("SH110X init failed");
-    while (true) { delay(1000); }
+
+    while (true) {
+      delay(1000);
+    }
   }
+
   display.clearDisplay();
   display.display();
-  
+
+  // เริ่มต้น DHT22
   dht.begin();
-  setup_wifi(); 
-  
+
+  // เชื่อมต่อ WiFi
+  setup_wifi();
+
+  // ตั้งค่า MQTT
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
 }
 
+// ==========================================
+// 13. Loop การทำงานหลัก
+// ==========================================
 void loop() {
   checkConfigButton();
 
   if (!client.connected()) {
     reconnect();
   }
+
   client.loop();
 
   unsigned long now = millis();
+
+  // อ่านค่าและส่งข้อมูลทุก 15 วินาที
   if (now - lastMsg > 15000) {
     lastMsg = now;
 
-    // อ่านค่าฮาร์ดแวร์จริง
+    // อ่านค่าอุณหภูมิจาก DHT22
     float t = dht.readTemperature();
-    float h = dht.readHumidity();
-    
-    int raw_soil = analogRead(SOIL_PIN);
-    float soil_moisture = map(raw_soil, AIR_VALUE, WATER_VALUE, 0, 100);
-    soil_moisture = constrain(soil_moisture, 0, 100);
 
-    // ตรวจสอบสัญญาณเซ็นเซอร์สภาพอากาศ
-    if (isnan(t) || isnan(h)) {
-      Serial.println("Error: DHT22 Fail");
-      showOLEDMessage("Sensor Error", "DHT22 ERR!!", "", "");
+    // ตรวจสอบว่าสามารถอ่านค่า DHT22 ได้หรือไม่
+    if (isnan(t)) {
+      Serial.println("Error: DHT22 Temperature Fail");
+      showOLEDMessage("Sensor Error", "DHT22 TEMP ERR!!", "", "");
       return;
     }
 
     // อัปเดตค่าลงตัวแปร Global
     currentTemp = t;
-    currentHum = h;
-    currentSoil = soil_moisture;
 
-    // พิมพ์เฉพาะตัวเล็กลงจอภาพ (นิ่งสนิท ไร้รอยทับ)
+    // แสดงผลบน OLED
     updateLCD();
 
-    // ------------------------------------------
-    // ส่งข้อมูล Telemetry (JSON Format)
-    // ------------------------------------------
-    StaticJsonDocument<200> telDoc;
-    telDoc["temperature"] = serialized(String(t, 2));
-    telDoc["humidity"]    = serialized(String(h, 2));
-    telDoc["soil_moisture"] = serialized(String(soil_moisture, 1));
+    // แสดงผลทาง Serial Monitor
+    Serial.print("Temperature: ");
+    Serial.print(t);
+    Serial.println(" C");
 
-    char telBuffer[200];
+    // ------------------------------------------
+    // ส่งข้อมูล Telemetry เฉพาะอุณหภูมิ
+    // Topic:
+    // smartfarm/siteA/zone1/device01/telemetry
+    // ------------------------------------------
+    StaticJsonDocument<100> telDoc;
+    telDoc["temperature"] = serialized(String(t, 2));
+
+    char telBuffer[100];
     serializeJson(telDoc, telBuffer);
+
     client.publish(TOPIC_TELEMETRY, telBuffer);
+
+    Serial.print("Publish telemetry: ");
+    Serial.println(telBuffer);
 
     // ------------------------------------------
     // ส่งข้อมูล Status
+    // Topic:
+    // smartfarm/siteA/zone1/device01/status
     // ------------------------------------------
     long rssi = WiFi.RSSI();
+
     StaticJsonDocument<150> statDoc;
     statDoc["online"] = true;
-    statDoc["rssi"]   = rssi;
-    statDoc["battery_v"] = 4.15;
+    statDoc["rssi"] = rssi;
+    statDoc["battery_v"] = 4.15; // ตอนนี้เป็นค่าคงที่ ยังไม่ได้อ่านจากวงจรจริง
 
     char statBuffer[150];
     serializeJson(statDoc, statBuffer);
+
     client.publish(TOPIC_STATUS, statBuffer, true);
+
+    Serial.print("Publish status: ");
+    Serial.println(statBuffer);
   }
 }
