@@ -19,7 +19,7 @@ const char* mqtt_pass  = "YOUR_MQTT_PASSWORD";
 // ==========================================
 // 2. การตั้งค่าโครงสร้าง MQTT Topic
 // ==========================================
-String mqttServer = "192.168.1.5";
+String mqttServer = "203.158.101.11";
 String siteId = "siteA";
 String zoneId = "zone1";
 String boardId = "device01";
@@ -34,7 +34,7 @@ String topicAck;
 // ==========================================
 #define DHTPIN        D4      // DHT22 sensor
 #define DHTTYPE       DHT22
-#define CONFIG_BUTTON D3      // WiFi Config button
+#define CONFIG_BUTTON D7      // WiFi Config button
 #define RELAY_PIN     D6      // Relay pump control
 
 // ESP8266 I2C pins: SDA=D2 (GPIO4), SCL=D1 (GPIO5)
@@ -87,7 +87,7 @@ void loadConfig() {
   EEPROM.begin(512);
   // For simplicity with ESP8266, we just use defaults
   // WiFiManager will handle persistent storage via its own mechanism
-  mqttServer = "192.168.1.5";
+  mqttServer = "203.158.101.11";
   siteId = "siteA";
   zoneId = "zone1";
   boardId = "device01";
